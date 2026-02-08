@@ -1,0 +1,274 @@
+syntax = "proto3";
+
+package inspection.gateway.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service InspectionGateway {
+  rpc UploadCad(stream UploadCadChunk) returns (UploadCadResponse);
+  rpc SetInspectionRegions(SetInspectionRegionsRequest) returns (SetInspectionRegionsResponse);
+  rpc PlanInspection(PlanInspectionRequest) returns (PlanInspectionResponse);
+
+  rpc StartInspection(StartInspectionRequest) returns (StartInspectionResponse);
+  rpc PauseInspection(ControlTaskRequest) returns (ControlTaskResponse);
+  rpc ResumeInspection(ControlTaskRequest) returns (ControlTaskResponse);
+  rpc StopInspection(ControlTaskRequest) returns (ControlTaskResponse);
+
+  rpc GetTaskStatus(GetTaskStatusRequest) returns (GetTaskStatusResponse);
+  rpc SubscribeSystemState(SubscribeRequest) returns (stream SystemStateEvent);
+  rpc SubscribeInspectionEvents(SubscribeRequest) returns (stream InspectionEvent);
+}
+
+message Result {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  OK = 1;
+  INVALID_ARGUMENT = 2;
+  NOT_FOUND = 3;
+  TIMEOUT = 4;
+  BUSY = 5;
+  INTERNAL = 6;
+  UNAVAILABLE = 7;
+  CONFLICT = 8;
+}
+
+message Pose2D {
+  double x = 1;
+  double y = 2;
+  double yaw = 3;
+  string frame_id = 4; // usually "map"
+}
+
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Quaternion {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+message Pose3D {
+  Vector3 position = 1;
+  Quaternion orientation = 2;
+  string frame_id = 3;
+}
+
+message UploadCadChunk {
+  string upload_id = 1; // client-generated id for one upload session
+  string filename = 2;
+  bytes data = 3;
+  uint32 chunk_index = 4;
+  bool eof = 5;
+  string sha256 = 6; // optional: only set on final chunk
+}
+
+message UploadCadResponse {
+  Result result = 1;
+  string model_id = 2;
+  uint64 total_bytes = 3;
+}
+
+message RegionBrush {
+  string region_id = 1;
+  repeated uint32 face_indices = 2;
+}
+
+message CameraViewConstraint {
+  double working_distance_m = 1;
+  double fov_h_deg = 2;
+  double fov_v_deg = 3;
+  double max_view_angle_deg = 4;
+  double standoff_min_m = 5;
+  double standoff_max_m = 6;
+}
+
+message SetInspectionRegionsRequest {
+  string model_id = 1;
+  repeated RegionBrush regions = 2;
+  CameraViewConstraint view_constraint = 3;
+  string operator_id = 4;
+}
+
+message SetInspectionRegionsResponse {
+  Result result = 1;
+  uint32 total_regions = 2;
+  uint32 total_faces = 3;
+}
+
+message PlanningWeights {
+  double w_agv_distance = 1;
+  double w_joint_delta = 2;
+  double w_manipulability = 3;
+  double w_view_error = 4;
+  double w_joint_limit = 5;
+}
+
+message PlanOptions {
+  double candidate_radius_m = 1;
+  double candidate_yaw_step_deg = 2;
+  bool enable_collision_check = 3;
+  bool enable_tsp_optimization = 4;
+  string ik_solver = 5; // e.g. "trac_ik", "ikfast", "moveit"
+  PlanningWeights weights = 6;
+}
+
+message PlanInspectionRequest {
+  string model_id = 1;
+  string task_name = 2;
+  PlanOptions options = 3;
+}
+
+message InspectionPoint {
+  int32 point_id = 1;
+  string region_id = 2;
+
+  Pose2D agv_pose = 3;          // AGV goal in map
+  Pose3D arm_pose = 4;          // optional debug/visualization pose
+  repeated double arm_joint_goal = 5; // MoveJ goal
+
+  double expected_quality = 6;
+  double planning_cost = 7;
+}
+
+message InspectionPath {
+  repeated InspectionPoint waypoints = 1;
+  uint32 total_points = 2;
+  double estimated_distance_m = 3;
+  double estimated_duration_s = 4;
+}
+
+message PlanningStatistics {
+  uint32 candidate_pose_count = 1;
+  uint32 ik_success_count = 2;
+  uint32 collision_filtered_count = 3;
+  double planning_time_ms = 4;
+}
+
+message PlanInspectionResponse {
+  Result result = 1;
+  string plan_id = 2;
+  InspectionPath path = 3;
+  PlanningStatistics stats = 4;
+}
+
+message StartInspectionRequest {
+  string plan_id = 1;
+  bool dry_run = 2;
+}
+
+message StartInspectionResponse {
+  Result result = 1;
+  string task_id = 2;
+}
+
+message ControlTaskRequest {
+  string task_id = 1;
+  string reason = 2;
+}
+
+message ControlTaskResponse {
+  Result result = 1;
+}
+
+message GetTaskStatusRequest {
+  string task_id = 1;
+}
+
+enum TaskPhase {
+  TASK_PHASE_UNSPECIFIED = 0;
+  IDLE = 1;
+  LOCALIZING = 2;
+  PLANNING = 3;
+  EXECUTING = 4;
+  PAUSED = 5;
+  COMPLETED = 6;
+  FAILED = 7;
+  STOPPED = 8;
+}
+
+message AgvStatus {
+  bool connected = 1;
+  bool arrived = 2;
+  bool moving = 3;
+  bool stopped = 4;
+  Pose2D current_pose = 5;
+  float battery_percent = 6;
+  string error_code = 7;
+}
+
+message ArmStatus {
+  bool connected = 1;
+  bool arrived = 2;
+  bool moving = 3;
+  repeated double current_joints = 4;
+  double manipulability = 5;
+  string error_code = 6;
+}
+
+message TaskStatus {
+  string task_id = 1;
+  TaskPhase phase = 2;
+  float progress_percent = 3;
+  string current_action = 4;
+  string error_message = 5;
+
+  AgvStatus agv = 6;
+  ArmStatus arm = 7;
+
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message GetTaskStatusResponse {
+  Result result = 1;
+  TaskStatus status = 2;
+}
+
+message SubscribeRequest {
+  string task_id = 1; // empty means all tasks
+  bool include_snapshot = 2;
+}
+
+message SystemStateEvent {
+  TaskStatus status = 1;
+}
+
+enum InspectionEventType {
+  INSPECTION_EVENT_TYPE_UNSPECIFIED = 0;
+  INFO = 1;
+  WARN = 2;
+  ERROR = 3;
+  CAPTURED = 4;
+  DEFECT_FOUND = 5;
+}
+
+message BoundingBox2D {
+  int32 x = 1;
+  int32 y = 2;
+  int32 w = 3;
+  int32 h = 4;
+}
+
+message DefectResult {
+  bool has_defect = 1;
+  string defect_type = 2;
+  float confidence = 3;
+  BoundingBox2D bbox = 4;
+}
+
+message InspectionEvent {
+  string task_id = 1;
+  int32 point_id = 2;
+  InspectionEventType type = 3;
+  string message = 4;
+  DefectResult defect = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
