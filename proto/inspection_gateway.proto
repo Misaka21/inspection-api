@@ -6,8 +6,9 @@ import "google/protobuf/timestamp.proto";
 
 service InspectionGateway {
   rpc UploadCad(stream UploadCadChunk) returns (UploadCadResponse);
-  rpc SetInspectionRegions(SetInspectionRegionsRequest) returns (SetInspectionRegionsResponse);
+  rpc SetInspectionTargets(SetInspectionTargetsRequest) returns (SetInspectionTargetsResponse);
   rpc PlanInspection(PlanInspectionRequest) returns (PlanInspectionResponse);
+  rpc GetPlan(GetPlanRequest) returns (GetPlanResponse);
 
   rpc StartInspection(StartInspectionRequest) returns (StartInspectionResponse);
   rpc PauseInspection(ControlTaskRequest) returns (ControlTaskResponse);
@@ -17,6 +18,11 @@ service InspectionGateway {
   rpc GetTaskStatus(GetTaskStatusRequest) returns (GetTaskStatusResponse);
   rpc SubscribeSystemState(SubscribeRequest) returns (stream SystemStateEvent);
   rpc SubscribeInspectionEvents(SubscribeRequest) returns (stream InspectionEvent);
+
+  // Navigation / media / results.
+  rpc GetNavMap(GetNavMapRequest) returns (GetNavMapResponse);
+  rpc ListCaptures(ListCapturesRequest) returns (ListCapturesResponse);
+  rpc DownloadMedia(DownloadMediaRequest) returns (stream MediaChunk);
 }
 
 message Result {
@@ -62,6 +68,35 @@ message Pose3D {
   string frame_id = 3;
 }
 
+// Generic reference for a binary blob stored/proxied by the gateway (images, maps, etc.).
+message MediaRef {
+  string media_id = 1;
+  string mime_type = 2; // e.g. "image/jpeg", "image/png"
+  uint64 size_bytes = 3;
+  string sha256 = 4; // optional
+  string url = 5;    // optional HTTP(S) url for direct download
+}
+
+message ImageRef {
+  MediaRef media = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  bytes thumbnail_jpeg = 4; // optional small preview for UI
+}
+
+message DownloadMediaRequest {
+  string media_id = 1;
+}
+
+message MediaChunk {
+  string media_id = 1;
+  bytes data = 2;
+  uint32 chunk_index = 3;
+  bool eof = 4;
+  string sha256 = 5;    // optional: only set on final chunk
+  uint64 total_bytes = 6; // optional: only set on final chunk
+}
+
 message UploadCadChunk {
   string upload_id = 1; // client-generated id for one upload session
   string filename = 2;
@@ -77,31 +112,56 @@ message UploadCadResponse {
   uint64 total_bytes = 3;
 }
 
-message RegionBrush {
-  string region_id = 1;
-  repeated uint32 face_indices = 2;
+// Capture configuration for one inspection task.
+//
+// Note: focus distance (camera-to-surface distance) is intentionally a single fixed value
+// to avoid defocus for industrial cameras.
+message CaptureConfig {
+  string camera_id = 1; // e.g. "hikvision_0"
+  double focus_distance_m = 2;
+
+  // Optional visualization hints (HMI can render a frustum without reading camera_info).
+  double fov_h_deg = 3;
+  double fov_v_deg = 4;
+
+  // Max allowed tilt angle between view_direction and (-surface.normal).
+  // 0 means must align with surface normal direction.
+  double max_tilt_from_normal_deg = 5;
 }
 
-message CameraViewConstraint {
-  double working_distance_m = 1;
-  double fov_h_deg = 2;
-  double fov_v_deg = 3;
-  double max_view_angle_deg = 4;
-  double standoff_min_m = 5;
-  double standoff_max_m = 6;
+message SurfacePoint {
+  Vector3 position = 1;
+  Vector3 normal = 2;   // unit vector, points along surface normal
+  string frame_id = 3;  // usually a model frame, e.g. "cad"
+  uint32 face_index = 4; // optional: for debug/round-trip in CAD mesh
 }
 
-message SetInspectionRegionsRequest {
+message ViewHint {
+  // Unit vector of camera forward direction in SurfacePoint.frame_id.
+  // Convention: view_direction = -normal means the camera looks "straight at" the surface.
+  Vector3 view_direction = 1;
+
+  // Rotation around view_direction, used to control image "up" direction.
+  double roll_deg = 2;
+}
+
+message InspectionTarget {
+  int32 point_id = 1;
+  string group_id = 2; // optional grouping (ex: "region_1")
+  SurfacePoint surface = 3;
+  ViewHint view = 4;
+}
+
+message SetInspectionTargetsRequest {
   string model_id = 1;
-  repeated RegionBrush regions = 2;
-  CameraViewConstraint view_constraint = 3;
+  repeated InspectionTarget targets = 2;
+  CaptureConfig capture = 3;
   string operator_id = 4;
 }
 
-message SetInspectionRegionsResponse {
+message SetInspectionTargetsResponse {
   Result result = 1;
-  uint32 total_regions = 2;
-  uint32 total_faces = 3;
+  uint32 total_targets = 2;
 }
 
 message PlanningWeights {
@@ -127,9 +187,13 @@ message PlanInspectionRequest {
   PlanOptions options = 3;
 }
 
+message GetPlanRequest {
+  string plan_id = 1;
+}
+
 message InspectionPoint {
   int32 point_id = 1;
-  string region_id = 2;
+  string group_id = 2;
 
   Pose2D agv_pose = 3;          // AGV goal in map
   Pose3D arm_pose = 4;          // optional debug/visualization pose
@@ -137,6 +201,11 @@ message InspectionPoint {
 
   double expected_quality = 6;
   double planning_cost = 7;
+
+  // Optional explicit target poses for better visualization/debug.
+  Pose3D tcp_pose_goal = 8;
+  Pose3D camera_pose = 9;
+  string camera_id = 10; // e.g. "hikvision_0"
 }
 
 message InspectionPath {
@@ -158,6 +227,17 @@ message PlanInspectionResponse {
   string plan_id = 2;
   InspectionPath path = 3;
   PlanningStatistics stats = 4;
+}
+
+message GetPlanResponse {
+  Result result = 1;
+  string plan_id = 2;
+  string model_id = 3;
+  string task_name = 4;
+  PlanOptions options = 5;
+  InspectionPath path = 6;
+  PlanningStatistics stats = 7;
+  google.protobuf.Timestamp created_at = 8;
 }
 
 message StartInspectionRequest {
@@ -203,6 +283,12 @@ message AgvStatus {
   Pose2D current_pose = 5;
   float battery_percent = 6;
   string error_code = 7;
+
+  float linear_velocity_mps = 8;
+  float angular_velocity_rps = 9;
+  Pose2D goal_pose = 10; // current navigation goal (if any)
+  string map_id = 11;    // optional: navigation map id
+  float localization_quality = 12; // optional: 0~1
 }
 
 message ArmStatus {
@@ -212,6 +298,10 @@ message ArmStatus {
   repeated double current_joints = 4;
   double manipulability = 5;
   string error_code = 6;
+
+  bool servo_enabled = 7; // optional
+  Pose3D tcp_pose = 8;    // optional: current TCP pose (preferably in "map")
+  Pose3D base_pose = 9;   // optional: arm base pose (preferably in "map")
 }
 
 message TaskStatus {
@@ -225,6 +315,21 @@ message TaskStatus {
   ArmStatus arm = 7;
 
   google.protobuf.Timestamp updated_at = 8;
+
+  string plan_id = 9;
+  string task_name = 10;
+
+  // 0-based index into the planned path.waypoints (if plan is available).
+  uint32 current_waypoint_index = 11;
+  int32 current_point_id = 12;
+  uint32 total_waypoints = 13;
+
+  bool interlock_ok = 14;
+  string interlock_message = 15;
+
+  double remaining_time_est_s = 16;
+  google.protobuf.Timestamp started_at = 17;
+  google.protobuf.Timestamp finished_at = 18;
 }
 
 message GetTaskStatusResponse {
@@ -239,6 +344,34 @@ message SubscribeRequest {
 
 message SystemStateEvent {
   TaskStatus status = 1;
+}
+
+message NavMapInfo {
+  string map_id = 1;
+  string name = 2;
+  double resolution_m_per_pixel = 3;
+  uint32 width = 4;
+  uint32 height = 5;
+  // Nav image pixel convention:
+  // - pixel u increases to the right
+  // - pixel v increases downward
+  // origin is the pose of pixel (u=0,v=0) in the map frame (usually yaw=0, frame_id="map").
+  // World->pixel:
+  //   u = (x - origin.x) / resolution_m_per_pixel
+  //   v = (origin.y - y) / resolution_m_per_pixel
+  Pose2D origin = 6;
+  ImageRef image = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message GetNavMapRequest {
+  string map_id = 1; // empty means current map (if any)
+  bool include_image_thumbnail = 2;
+}
+
+message GetNavMapResponse {
+  Result result = 1;
+  NavMapInfo map = 2;
 }
 
 enum InspectionEventType {
@@ -271,4 +404,34 @@ message InspectionEvent {
   string message = 4;
   DefectResult defect = 5;
   google.protobuf.Timestamp timestamp = 6;
+
+  // Capture / media association.
+  string capture_id = 7;
+  string camera_id = 8;
+  ImageRef image = 9;
+
+  // Prefer using defects[] for multiple detections; defect is kept for backward compatibility.
+  repeated DefectResult defects = 10;
+  Pose3D camera_pose = 11; // optional: camera pose at capture time
+}
+
+message CaptureRecord {
+  string task_id = 1;
+  int32 point_id = 2;
+  string capture_id = 3;
+  string camera_id = 4;
+  ImageRef image = 5;
+  repeated DefectResult defects = 6;
+  google.protobuf.Timestamp captured_at = 7;
+}
+
+message ListCapturesRequest {
+  string task_id = 1;
+  int32 point_id = 2; // 0 means all points
+  bool include_thumbnails = 3;
+}
+
+message ListCapturesResponse {
+  Result result = 1;
+  repeated CaptureRecord captures = 2;
 }
