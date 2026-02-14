@@ -29,6 +29,10 @@ flowchart LR
   GW --> ROS
 ```
 
+说明：
+- **HMI 不直接连接 ROS2**（避免要求 Windows 安装 ROS2/DDS 环境）
+- `inspection_gateway` 运行在机器人端（与 ROS2 同环境），对外提供 gRPC，对内桥接 ROS2 topic/service
+
 ## 3. V1 接口范围
 
 V1 接口以“上位机效果”为导向，覆盖：工程配置、规划、执行控制、复合机械臂状态监测、取图与缺陷结果回显。
