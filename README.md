@@ -1,6 +1,12 @@
-# inspection-api
+# inspection-api (已归档)
 
-大型工件视觉检测系统的通信协议仓库。  
+> **本仓库已归档。** gRPC proto 定义已被 `inspection_gateway` 中的 Pydantic 模型 + FastAPI 自动生成 OpenAPI 文档替代。接口契约现在直接定义在 `inspection_gateway/api/models.py` 中。
+>
+> 新架构详见 `inspection_gateway/CLAUDE.md`。
+
+---
+
+大型工件视觉检测系统的通信协议仓库（原 gRPC 协议定义）。
 该仓库只维护外部接口定义，不包含机器人控制逻辑。
 
 ## 1. 仓库定位
